@@ -117,93 +117,113 @@ export const register = async ({
 
 export const login = async ({ email_or_phone_number, password }) => {
 	try {
-		let findByEmailOrPhoneNumber;
+		const user = await findUserByEmailOrPhone(email_or_phone_number);
 
-		const isEmail = actualEmailRegex.test(email_or_phone_number);
-		const isPhoneNumber = actualPhoneRegex.test(email_or_phone_number);
+		validateUserCredentials(user, password);
 
-		if (isEmail) {
-			findByEmailOrPhoneNumber = await User.findOne({
-				where: {
-					email: email_or_phone_number,
-				},
-			});
-		}
+		const userWithRole = await getUserWithRoleDetails(user.id);
 
-		if (isPhoneNumber) {
-			findByEmailOrPhoneNumber = await User.findOne({
-				where: {
-					phone_number: email_or_phone_number,
-				},
-			});
-		}
-
-		if (!findByEmailOrPhoneNumber) {
-			throw new BaseError({
-				status: StatusCodes.UNAUTHORIZED,
-				message: 'username or password is wrong',
-			});
-		}
-
-		if (!bcrypt.compareSync(password, findByEmailOrPhoneNumber.password_hash)) {
-			throw new BaseError({
-				status: StatusCodes.UNAUTHORIZED,
-				message: 'username or password is wrong',
-			});
-		}
-
-		const findUser = await UserRole.findOne({
-			where: {
-				user_id: findByEmailOrPhoneNumber.id,
-			},
-			include: [
-				{
-					model: User,
-					as: 'user',
-					attributes: ['id', 'username', 'email', 'phone_number', 'full_name'],
-					include: [
-						{
-							model: Seller,
-							as: 'seller',
-							attributes: ['id'],
-						},
-					],
-				},
-				{
-					model: Role,
-					as: 'role',
-					attributes: ['name'],
-				},
-			],
-		});
 		const token = await createToken({
 			payload: {
-				id: findByEmailOrPhoneNumber.id,
-				username: findByEmailOrPhoneNumber.username,
+				id: user.id,
+				username: user.username,
 			},
 		});
-
-		const response = {
-			id: findUser.user.id,
-			username: findUser.user.username,
-			email: findUser.user.email,
-			phone_number: findUser.user.phone_number,
-			full_name: findUser.user.full_name,
-			role: findUser.role.name,
-		};
-
-		if (findUser.user?.seller?.id) {
-			response.seller_id = findUser.user?.seller?.id;
-		}
+		const response = buildUserResponse(userWithRole);
 
 		return {
 			data: response,
-
 			token,
 		};
 	} catch (err) {
 		errorThrower(err);
 	}
+};
+const findUserByEmailOrPhone = async (emailOrPhone) => {
+	const isEmail = actualEmailRegex.test(emailOrPhone);
+	const isPhoneNumber = actualPhoneRegex.test(emailOrPhone);
+
+	if (!isEmail && !isPhoneNumber) {
+		throw new BaseError({
+			status: StatusCodes.BAD_REQUEST,
+			message: 'Invalid email or phone number format',
+		});
+	}
+
+	const whereClause = isEmail
+		? { email: emailOrPhone }
+		: { phone_number: emailOrPhone };
+
+	const user = await User.findOne({ where: whereClause });
+
+	if (!user) {
+		throw new BaseError({
+			status: StatusCodes.UNAUTHORIZED,
+			message: 'username or password is wrong',
+		});
+	}
+
+	return user;
+};
+
+const validateUserCredentials = (user, password) => {
+	if (!bcrypt.compareSync(password, user.password_hash)) {
+		throw new BaseError({
+			status: StatusCodes.UNAUTHORIZED,
+			message: 'username or password is wrong',
+		});
+	}
+};
+
+const getUserWithRoleDetails = async (userId) => {
+	const userWithRole = await UserRole.findOne({
+		where: { user_id: userId },
+		include: [
+			{
+				model: User,
+				as: 'user',
+				attributes: ['id', 'username', 'email', 'phone_number', 'full_name'],
+				include: [
+					{
+						model: Seller,
+						as: 'seller',
+						attributes: ['id'],
+					},
+				],
+			},
+			{
+				model: Role,
+				as: 'role',
+				attributes: ['name'],
+			},
+		],
+	});
+
+	if (!userWithRole) {
+		throw new BaseError({
+			status: StatusCodes.INTERNAL_SERVER_ERROR,
+			message: 'User role not found',
+		});
+	}
+
+	return userWithRole;
+};
+
+const buildUserResponse = (userWithRole) => {
+	const response = {
+		id: userWithRole.user.id,
+		username: userWithRole.user.username,
+		email: userWithRole.user.email,
+		phone_number: userWithRole.user.phone_number,
+		full_name: userWithRole.user.full_name,
+		role: userWithRole.role.name,
+	};
+
+	if (userWithRole.user?.seller?.id) {
+		response.seller_id = userWithRole.user.seller.id;
+	}
+
+	return response;
 };
 
 export const findProfile = async ({ id }) => {
