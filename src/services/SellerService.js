@@ -2,6 +2,7 @@ import errorThrower from '../utils/errorThrower.js';
 import db from '../models/index.js';
 import BaseError from '../exception/BaseError.js';
 import { StatusCodes } from 'http-status-codes';
+import { generateSlug } from '../utils/string.js';
 
 const { Seller, User, Role, UserRole, SellerAddress } = db;
 
@@ -121,30 +122,35 @@ export const updateSellerProfile = async ({
 	store_description,
 }) => {
 	try {
-		await db.sequelize.transaction(async (t) => {
-			return await Seller.update(
+		const updatedSeller = await db.sequelize.transaction(async (t) => {
+			const [affectedRows] = await Seller.update(
 				{
 					store_name,
 					store_description,
-					slug: store_name.replace(' ', ''),
+					slug: generateSlug(store_name),
 				},
 				{
-					where: {
-						id,
-					},
-				},
-				{ transaction: t }
+					where: { id },
+					transaction: t,
+				}
 			);
+
+			if (affectedRows === 0) {
+				throw new BaseError({
+					status: StatusCodes.INTERNAL_SERVER_ERROR,
+					message: 'Failed to update seller profile',
+				});
+			}
+
+			const result = await Seller.findOne({
+				where: { id },
+				transaction: t,
+			});
+
+			return result;
 		});
 
-		const findSeller = await Seller.findOne({
-			where: {
-				id,
-			},
-			attributes: ['id', 'store_name', 'slug', 'store_description', 'status'],
-		});
-
-		return findSeller;
+		return updatedSeller.get({ plain: true });
 	} catch (err) {
 		errorThrower(err);
 	}
