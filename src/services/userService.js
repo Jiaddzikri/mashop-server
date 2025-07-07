@@ -17,39 +17,27 @@ export const register = async ({
 	password,
 }) => {
 	try {
-		const isEmail = actualEmailRegex.test(email_or_phone_number);
-		const isPhoneNumber = actualPhoneRegex.test(email_or_phone_number);
-		const form = {
-			username,
-			password_hash: password,
-			full_name: fullname,
-		};
-		if (isPhoneNumber) {
-			const isUserExist = await User.findOne({
-				where: {
-					phone_number: email_or_phone_number,
-				},
+		const findEmailOrPhoneNumber = await findUserByEmailOrPhone(
+			email_or_phone_number
+		);
+
+		if (findEmailOrPhoneNumber) {
+			throw new BaseError({
+				status: StatusCodes.BAD_REQUEST,
+				message: 'email or phone number already registered',
 			});
-			if (isUserExist) {
-				throw new BaseError({
-					status: StatusCodes.BAD_REQUEST,
-					message: 'phone number already used',
-				});
-			}
-			form['phone_number'] = email_or_phone_number;
 		}
 
-		if (isEmail) {
-			const isUserExist = await User.findOne({
-				where: { email: email_or_phone_number },
-			});
-			if (isUserExist) {
-				throw new BaseError({
-					status: StatusCodes.BAD_REQUEST,
-					message: 'email already used',
-				});
-			}
-			form['email'] = email_or_phone_number;
+		const form = {
+			full_name: fullname,
+			username,
+			password_hash: password,
+		};
+
+		if (actualEmailRegex.test(email_or_phone_number)) {
+			form.email = email_or_phone_number;
+		} else {
+			form.phone_number = email_or_phone_number;
 		}
 
 		const findRole = await Role.findOne({
@@ -60,44 +48,18 @@ export const register = async ({
 
 		const createdUser = await db.sequelize.transaction(async () => {
 			const user = await User.create(form);
+
 			await UserRole.create({
 				user_id: user.id,
 				role_id: findRole.id,
 			});
 
-			const findUser = await UserRole.findOne({
-				where: {
-					user_id: user.id,
-				},
-				include: [
-					{
-						model: User,
-						as: 'user',
-						attributes: [
-							'id',
-							'username',
-							'email',
-							'phone_number',
-							'full_name',
-						],
-					},
-					{
-						model: Role,
-						as: 'role',
-						attributes: ['name'],
-					},
-				],
-			});
-
-			return {
-				id: findUser.user.id,
-				username: findUser.user.username,
-				email: findUser.user.email,
-				phone_number: findUser.user.phone_number,
-				full_name: findUser.user.full_name,
-				role: findUser.role.name,
-			};
+			return user;
 		});
+
+		const findUserWithRole = await getUserWithRoleDetails(createdUser.id);
+
+		const response = buildUserResponse(findUserWithRole);
 
 		const token = await createToken({
 			payload: {
@@ -107,7 +69,7 @@ export const register = async ({
 		});
 
 		return {
-			data: createdUser,
+			data: response,
 			token: token,
 		};
 	} catch (err) {
@@ -118,6 +80,13 @@ export const register = async ({
 export const login = async ({ email_or_phone_number, password }) => {
 	try {
 		const user = await findUserByEmailOrPhone(email_or_phone_number);
+
+		if (!user) {
+			throw new BaseError({
+				status: StatusCodes.UNAUTHORIZED,
+				message: 'username or password is wrong',
+			});
+		}
 
 		validateUserCredentials(user, password);
 
@@ -155,13 +124,6 @@ const findUserByEmailOrPhone = async (emailOrPhone) => {
 		: { phone_number: emailOrPhone };
 
 	const user = await User.findOne({ where: whereClause });
-
-	if (!user) {
-		throw new BaseError({
-			status: StatusCodes.UNAUTHORIZED,
-			message: 'username or password is wrong',
-		});
-	}
 
 	return user;
 };
